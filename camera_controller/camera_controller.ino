@@ -6,7 +6,7 @@
 const int inPin = A0;   // IR sensor wire is plugged into pin 7
 const unsigned int sampleRate = 2000;     // sample Rate in Hz
 const float dT = 1000000.0 / float(sampleRate);
-const float threshold = 0.6;
+const float threshold = 1.5;
 const uint32_t tDelay = 10e6;
 uint32_t startTime;
 uint32_t tRemoved;
@@ -129,7 +129,7 @@ void loop() {
   if (now - last_time > dt) {
     last_time = now;
     // Measure IR sensor, filter events through sliding window
-    val.asFloat = 5. / 1024 * analogRead(A0);
+    val.asFloat = 3.3 / 1024 * analogRead(A0);
     window_shift(val.asFloat > threshold);
 
     if (!ProboscisDetect && (window_state() == true))
