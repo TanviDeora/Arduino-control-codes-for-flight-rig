@@ -4,9 +4,7 @@
 // 2) trigger cameras
 
 const int inPin = A0;   // IR sensor wire is plugged into pin 7
-const unsigned int sampleRate = 2000;     // sample Rate in Hz
-const float dT = 1000000.0 / float(sampleRate);
-const float threshold = 1.5;
+const float threshold = 0.6;
 const uint32_t tDelay = 10e6;
 uint32_t startTime;
 uint32_t tRemoved;
@@ -24,7 +22,7 @@ union {
 } tDetect;
 
 struct {
-  static const int len = 1000;
+  static const int len = 10;
   bool window[len];
 } DetectWindow;
 
@@ -118,13 +116,14 @@ void loop() {
     Serial.write(val.asBytes, 4);
     Serial.write(tDetect.asBytes, 4);
     Serial.write(inject);
+    inject = false;
     Serial.write(0xAA);
     interrupt_flag = false;
   }
 
   uint32_t now = micros();
   static uint32_t last_time;
-  static const uint32_t dt = 10 * 1000;
+  static const uint32_t dt = 1 * 1000;
   // Task 2, measure IR sensor, sends injection commands
   if (now - last_time > dt) {
     last_time = now;
@@ -150,10 +149,6 @@ void loop() {
       //Serial.println("Inject");
       tRemoved =0;
       inject = true;
-    }
-    else
-    {
-      inject = false;
     }
   }
 }
