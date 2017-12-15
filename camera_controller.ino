@@ -4,9 +4,8 @@
 // 2) trigger cameras
 
 const int inPin = A0;   // IR sensor wire is plugged into pin 7
-const float OnThreshold = 0.6;
-const float OffThreshold = 0.5;
-const uint32_t tDelay = 6e6;
+const float threshold = 0.6;
+const uint32_t tDelay = 10e6;
 uint32_t startTime;
 uint32_t tRemoved;
 bool ProboscisDetect;
@@ -25,39 +24,18 @@ union {
 struct {
   static const int len = 10;
   bool window[len];
-} DetectOnWindow;
+} DetectWindow;
 
-struct {
-  static const int len = 5000;
-  bool window[len];
-} DetectOffWindow;
-
-void windowOn_shift(bool value) {
-  for (int i = 0; i < DetectOnWindow.len - 1; i ++) {
-    DetectOnWindow.window[i+1]=DetectOnWindow.window[i];
+void window_shift(bool value) {
+  for (int i = 0; i < DetectWindow.len - 1; i ++) {
+    DetectWindow.window[i+1]=DetectWindow.window[i];
   }
-  DetectOnWindow.window[0] = value;
+  DetectWindow.window[0] = value;
 }
 
-void windowOff_shift(bool value) {
-  for (int i = 0; i < DetectOffWindow.len - 1; i ++) {
-    DetectOffWindow.window[i+1]=DetectOffWindow.window[i];
-  }
-  DetectOffWindow.window[0] = value;
-}
-
-bool windowOn_state() {
-  for (int i = 0; i < DetectOnWindow.len; i++) {
-    if (DetectOnWindow.window[i]) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool windowOff_state() {
-  for (int i = 0; i < DetectOffWindow.len; i++) {
-    if (DetectOffWindow.window[i]) {
+bool window_state() {
+  for (int i = 0; i < DetectWindow.len; i++) {
+    if (DetectWindow.window[i]) {
       return true;
     }
   }
@@ -143,36 +121,28 @@ void loop() {
     interrupt_flag = false;
   }
 
-// Task 2, keeps track of IR data, detects probcis and send a inject cmd
   uint32_t now = micros();
   static uint32_t last_time;
-  static const uint32_t dt = 1 * 1000; // sample IR sensor data at 1kHz
+  static const uint32_t dt = 1 * 1000;
   // Task 2, measure IR sensor, sends injection commands
   if (now - last_time > dt) {
     last_time = now;
     // Measure IR sensor, filter events through sliding window
     val.asFloat = 3.3 / 1024 * analogRead(A0);
-    windowOn_shift(val.asFloat > OnThreshold);
-    windowOff_shift(val.asFloat < OffThreshold);
+    window_shift(val.asFloat > threshold);
 
-    if (!ProboscisDetect && (windowOn_state() == true))
+    if (!ProboscisDetect && (window_state() == true))
     {
       ProboscisDetect = true;
-      if (inject == false)
-      {
-        tDetect.asUint32 = micros() - startTime;
-      }
-      else
-      {
-        tDetect.asUint32 = 0;     
-      }
+      tDetect.asUint32 = micros() - startTime;
     }
 
-    if (ProboscisDetect && windowOff_state() == true)
+    if (ProboscisDetect && !window_state())
     {
       //Serial.println("Proboscis removed");
       tRemoved = micros() - startTime;
       ProboscisDetect = false;
+      inject = false;
     }
     else if ((tRemoved > 0) && (micros() - startTime >= tRemoved + tDelay))
     {
@@ -180,6 +150,5 @@ void loop() {
       tRemoved =0;
       inject = true;
     }
-   }
+  }
 }
-
