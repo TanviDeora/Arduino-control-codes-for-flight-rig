@@ -122,16 +122,22 @@ void setup() {
 }
 
 void loop() {
-
+  
+  static bool stop_command = false;
+  
   static struct {
     union {
       uint32_t asUint32;
       byte asBytes[4];
     };
   } camera_time;
+  
+  static uint32_t last_time;
+  static const uint32_t dt = 1 * 1000; // sample IR sensor data at 1kHz
+  uint32_t now = micros();
 
   // Task 1, records time of camera trigger, transmits packets to PC
-  if(interrupt_flag) {
+  if(interrupt_flag && !stop_command) {
     camera_time.asUint32 = micros() - startTime;
     Serial.write(0xFF);
     Serial.write(camera_time.asBytes, 4);
@@ -141,13 +147,39 @@ void loop() {
     inject = false;
     Serial.write(0xAA);
     interrupt_flag = false;
+  } 
+  
+  // Read bytes from the serial buffer so that we intercept the "start" and "stop" commands
+  else {
+    static char buff[7];
+    static uint8_t head = 0;
+    while (Serial.available()) {
+      buff[head++] = Serial.read();
+      buff[head] = '\0';
+      if (!strcmp(buff, "stop")) {
+        head = 0;
+        stop_command = true;
+        // Turn off PWM
+        pmc_disable_periph_clk(periph_id);
+      }
+      else if (!strcmp(buff, "start")) {
+        head = 0;
+        stop_command = false;
+        startTime = micros();
+        Serial.write(startTime);
+        // Turn on PWM
+        setup_pwm();
+        // Clear pending interrupt
+        interrupt_flag = false;
+      }
+      else if (head == sizeof(buff)-1) {
+        head = 0;
+      }
+    }
   }
-
-  uint32_t now = micros();
-  static uint32_t last_time;
-  static const uint32_t dt = 1 * 1000; // sample IR sensor data at 1kHz
+  
   // Task 2, measure IR sensor, sends injection commands
-  if (now - last_time > dt) {
+  if ((now - last_time > dt) && !stop_command) {
     last_time = now;
     // Measure IR sensor, filter events through sliding window
     val.asFloat = 3.3 / 1024 * analogRead(A0);
