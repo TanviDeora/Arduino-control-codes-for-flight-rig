@@ -151,18 +151,20 @@ void loop() {
 
   // Read bytes from the serial buffer so that we intercept the "start" and "stop" commands
   else {
-    static char buff[7];
+    static char buff[10];
     static uint8_t head = 0;
     while (Serial.available()) {
+      delay(1); // Gives time for next bit to come in
       buff[head++] = Serial.read();
+
       buff[head] = '\0';
-      if (!strcmp(buff, "stop")) {
+      if (!strcmp(buff, "stop\n")) {
         head = 0;
         stop_command = true;
         // Turn off PWM
         pmc_disable_periph_clk(periph_id);
       }
-      else if (!strcmp(buff, "start")) {
+      else if (!strcmp(buff, "start\n")) {
         head = 0;
         stop_command = false;
         startTime = micros();
@@ -176,6 +178,7 @@ void loop() {
         head = 0;
       }
     }
+    head = 0;
   }
 
   // Task 2, measure IR sensor, sends injection commands
@@ -211,5 +214,5 @@ void loop() {
       tRemoved =0;
       inject = true;
     }
-   }
+  }
 }
