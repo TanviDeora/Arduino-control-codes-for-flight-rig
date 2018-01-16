@@ -4,8 +4,8 @@
 // 2) trigger cameras
 
 const int inPin = A0;   // IR sensor wire is plugged into pin 7
-const float OnThreshold = 0.6;
-const float OffThreshold = 0.5;
+const float OnThreshold = 1.2;
+const float OffThreshold = 1.0;
 const uint32_t tDelay = 6e6;
 uint32_t startTime;
 uint32_t tRemoved;
@@ -17,51 +17,35 @@ union {
   byte asBytes[4];
 } val;
 
-union {
-  uint32_t asUint32;
-  byte asBytes[4];
-} tDetect;
+//union {
+//  uint32_t asUint32;
+//  byte asBytes[4];
+//} tDetect;
 
-struct {
-  static const int len = 10;
-  bool window[len];
-} DetectOnWindow;
+typedef struct{
+  int len;
+  bool * window;
+} window_t;
 
-struct {
-  static const int len = 5000;
-  bool window[len];
-} DetectOffWindow;
+bool bar[10];
+window_t DetectOnWindow = {.len=sizeof(bar), .window = bar};
+bool foo[3000];
+window_t DetectOffWindow = {.len=sizeof(foo), .window = foo};
 
-void windowOn_shift(bool value) {
-  for (int i = 0; i < DetectOnWindow.len - 1; i ++) {
-    DetectOnWindow.window[i+1]=DetectOnWindow.window[i];
+void window_shift(window_t * window_ptr, bool value) {
+  for (int i = 0; i < window_ptr->len -1; i++) {
+    window_ptr->window[i+1] = window_ptr->window[i];
   }
-  DetectOnWindow.window[0] = value;
+  window_ptr->window[0] = value;
 }
 
-void windowOff_shift(bool value) {
-  for (int i = 0; i < DetectOffWindow.len - 1; i ++) {
-    DetectOffWindow.window[i+1]=DetectOffWindow.window[i];
-  }
-  DetectOffWindow.window[0] = value;
-}
-
-bool windowOn_state() {
-  for (int i = 0; i < DetectOnWindow.len; i++) {
-    if (DetectOnWindow.window[i]) {
-      return true;
+bool window_state(window_t * window_ptr) {
+  for (int i = 0; i < window_ptr->len; i++) {
+    if (!window_ptr->window[i]) {
+      return false;
     }
   }
-  return false;
-}
-
-bool windowOff_state() {
-  for (int i = 0; i < DetectOffWindow.len; i++) {
-    if (DetectOffWindow.window[i]) {
-      return true;
-    }
-  }
-  return false;
+  return true;
 }
 
 // PWM Configuration related constants
@@ -116,6 +100,7 @@ void setup() {
   val.asFloat = 0.0; // variable to store the read value (0=beam intact,1=beam interrupted)
   ProboscisDetect = false;
   inject = false;
+  tDetect = false;
   startTime=micros();
   setup_pwm();
   Serial.write(startTime);
@@ -143,6 +128,8 @@ void loop() {
     Serial.write(camera_time.asBytes, 4);
     Serial.write(val.asBytes, 4);
     Serial.write(tDetect.asBytes, 4);
+    Serial.write(tDetect);
+    tDetect = false;
     Serial.write(inject);
     inject = false;
     Serial.write(0xAA);
@@ -186,33 +173,27 @@ void loop() {
     last_time = now;
     // Measure IR sensor, filter events through sliding window
     val.asFloat = 3.3 / 1024 * analogRead(A0);
-    windowOn_shift(val.asFloat > OnThreshold);
-    windowOff_shift(val.asFloat < OffThreshold);
+   window_shift(&DetectOnWindow, val.asFloat > OnThreshold);
+   window_shift(&DetectOffWindow, val.asFloat < OffThreshold);
 
-    if (!ProboscisDetect && (windowOn_state() == true))
+    if (!ProboscisDetect && window_state(&DetectOnWindow))
     {
       ProboscisDetect = true;
-      if (inject == false)
-      {
-        tDetect.asUint32 = micros() - startTime;
-      }
-      else
-      {
-        tDetect.asUint32 = 0;
-      }
+      tDetect = true;
     }
-
-    if (ProboscisDetect && windowOff_state() == true)
+      
+      else if (ProboscisDetect && window_state(&DetectOffWindow))
     {
       //Serial.println("Proboscis removed");
-      tRemoved = micros() - startTime;
+      tRemoved = micros();
       ProboscisDetect = false;
     }
-    else if ((tRemoved > 0) && (micros() - startTime >= tRemoved + tDelay))
+    else if ((tRemoved > 0) && !ProboscisDetect && (micros() >= tRemoved + tDelay))
     {
       //Serial.println("Inject");
       tRemoved =0;
       inject = true;
     }
-  }
-}
+   }
+
+ }
