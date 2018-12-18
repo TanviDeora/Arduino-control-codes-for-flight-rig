@@ -1,68 +1,8 @@
-
-// written by Tanvi Deora but actually mostly by Joseph Sullivan
-// to 1) detect proboscis as a break in IR path
-// 2) trigger cameras
-
-const int inPin = A0;   // IR sensor wire is plugged into pin 7
-const float OnThreshold = 0.6;
-const float OffThreshold = 0.5;
-const uint32_t tDelay = 6e6;
-uint32_t startTime;
-uint32_t tRemoved;
-bool ProboscisDetect;
-bool inject;
-
-union {
-  float asFloat;
-  byte asBytes[4];
-} val;
-
-union {
-  uint32_t asUint32;
-  byte asBytes[4];
-} tDetect;
-
-struct {
-  static const int len = 10;
-  bool window[len];
-} DetectOnWindow;
-
-struct {
-  static const int len = 5000;
-  bool window[len];
-} DetectOffWindow;
-
-void windowOn_shift(bool value) {
-  for (int i = 0; i < DetectOnWindow.len - 1; i ++) {
-    DetectOnWindow.window[i+1]=DetectOnWindow.window[i];
-  }
-  DetectOnWindow.window[0] = value;
-}
-
-void windowOff_shift(bool value) {
-  for (int i = 0; i < DetectOffWindow.len - 1; i ++) {
-    DetectOffWindow.window[i+1]=DetectOffWindow.window[i];
-  }
-  DetectOffWindow.window[0] = value;
-}
-
-bool windowOn_state() {
-  for (int i = 0; i < DetectOnWindow.len; i++) {
-    if (DetectOnWindow.window[i]) {
-      return true;
-    }
-  }
-  return false;
-}
-
-bool windowOff_state() {
-  for (int i = 0; i < DetectOffWindow.len; i++) {
-    if (DetectOffWindow.window[i]) {
-      return true;
-    }
-  }
-  return false;
-}
+// FOO
+#include <Wire.h>
+/*
+ * Code by Joseph Sullivan
+ */
 
 // PWM Configuration related constants
 const PinDescription pwm_pin_description = g_APinDescription[9];
@@ -75,6 +15,7 @@ const uint32_t frequency = 100; // frequency
 const uint32_t period_register_data = clocka / frequency;
 const uint32_t duty_register_data = period_register_data / 2;
 
+// PWM Interrupt configuration
 bool interrupt_flag = false;
 void PWM_Handler(void) {
   interrupt_flag = true;
@@ -104,13 +45,21 @@ void setup_pwm() {
   NVIC_EnableIRQ((IRQn_Type)36);
 }
 
+void refillFlowers(void);
+
 void setup() {
+
+  // Set up digital pins which indicate which flowers have nectar
   pinMode(inPin, INPUT);      // sets the digital pin 7 as input WHY?
+
+  // Construct flower objects
+
+  // Start the serial port
   Serial.begin(115200);
   // Wait for start command before we begin
   char buff[6];
   while(strcmp(buff, "start")!=0){/*wait until the string "start" is read*/
-    int count = Serial.readBytesUntil('\n',buff,6);
+    size_t count = Serial.readBytesUntil('\n',buff,6);
     buff[count] = '\0';
   }
   val.asFloat = 0.0; // variable to store the read value (0=beam intact,1=beam interrupted)
@@ -124,28 +73,24 @@ void setup() {
 void loop() {
 
   static bool stop_command = false;
-
-  static struct {
-    union {
-      uint32_t asUint32;
-      byte asBytes[4];
-    };
-  } camera_time;
-
   static uint32_t last_time;
   static const uint32_t dt = 1 * 1000; // sample IR sensor data at 1kHz
+  static float[4] irSensorVals;
+  static float[4] solnSensorvals;
+  static int inject = 0;
   uint32_t now = micros();
 
   // Task 1, records time of camera trigger, transmits packets to PC
   if(interrupt_flag && !stop_command) {
-    camera_time.asUint32 = micros() - startTime;
-    Serial.write(0xFF);
-    Serial.write(camera_time.asBytes, 4);
-    Serial.write(val.asBytes, 4);
-    Serial.write(tDetect.asBytes, 4);
-    Serial.write(inject);
-    inject = false;
-    Serial.write(0xAA);
+    uint32_t cameraTime = micros() - startTime;
+    packet_t packet;
+    init_packet(&packet);
+    for (int i = 0; i < 4; i++) {
+      packet.irSensorVals[i] = irSensorVals[i];
+      packet.proboscisDetect[i] = (flowers[i]->tDetect != 0);
+      flowers[i]->tDetect = 0;
+    }
+    Serial.write((uint8_t *)packet, sizeof(packet))
     interrupt_flag = false;
   }
 
@@ -154,65 +99,63 @@ void loop() {
     static char buff[10];
     static uint8_t head = 0;
     while (Serial.available()) {
-      delay(1); // Gives time for next bit to come in
-      buff[head++] = Serial.read();
-
-      buff[head] = '\0';
-      if (!strcmp(buff, "stop\n")) {
-        head = 0;
+      size_t count = Serial.readBytesUntil('\n', buff, sizeof(buff)-1);
+      buff[count] = '\0';
+      if (!strcmp(buff, "stop")) {
         stop_command = true;
-        // Turn off PWM
         pmc_disable_periph_clk(periph_id);
       }
-      else if (!strcmp(buff, "start\n")) {
-        head = 0;
+      else if (!strcmp(buff, "start")) {
         stop_command = false;
         startTime = micros();
         Serial.write(startTime);
-        // Turn on PWM
         setup_pwm();
-        // Clear pending interrupt
         interrupt_flag = false;
       }
-      else if (head == sizeof(buff)-1) {
-        head = 0;
-      }
     }
-    head = 0;
   }
 
-  // Task 2, measure IR sensor, sends injection commands
-  if ((now - last_time > dt) && !stop_command) {
+  /* Collect new data from flowers and refill them as necessary*/
+  if ((now - last_time) > dt) {
     last_time = now;
-    // Measure IR sensor, filter events through sliding window
-    val.asFloat = 3.3 / 1024 * analogRead(A0);
-    windowOn_shift(val.asFloat > OnThreshold);
-    windowOff_shift(val.asFloat < OffThreshold);
+    for (int i = 0; i < 4; i++) {
+      irSensorVals[i] = flowers[i]->readIRSensor();
+      solnSensorVals[i] = flowers[i]->readSolutionSensor();
+    }
+    refillFlowers();
+  }
+}
 
-    if (!ProboscisDetect && (windowOn_state() == true))
-    {
-      ProboscisDetect = true;
-      if (inject == false)
-      {
-        tDetect.asUint32 = micros() - startTime;
+/* This tasks handles the refilling of any flowers that are empty
+   It is noblocking, and must be called continuously.
+*/
+void refillFlowers(void) {
+  static int pinMap[4] = {4, 5, 6, 7};
+  bool allFlowersFull = true;
+  for (int i = 0; i < 4; i++) {
+    Flower * flower = flowers[i];
+    if (flower->isEmpty()) {
+      allFlowersFull = false;
+      bool mothNotFeeding = true;
+      for (int j = 0; j < 4; j++) {
+        mothNotFeeding &= flowers[j]->proboscisUndetected();
       }
-      else
-      {
-        tDetect.asUint32 = 0;
+      if (mothNotFeeding) {
+        uint32_t tRemoved = flower->tRemoved;
+        bool proboscisWasRemoved = tRemoved > 0;
+        if (proboscisWasRemoved && (micros() > (tRemoved + tDelay))) {
+          digitalWrite(pinMap[i], HIGH);
+          digitalWrite(22, HIGH);
+          inject = i+1;
+        }      
       }
+      break;
     }
+  }
 
-    if (ProboscisDetect && windowOff_state() == true)
-    {
-      //Serial.println("Proboscis removed");
-      tRemoved = micros() - startTime;
-      ProboscisDetect = false;
-    }
-    else if ((tRemoved > 0) && (micros() - startTime >= tRemoved + tDelay))
-    {
-      //Serial.println("Inject");
-      tRemoved =0;
-      inject = true;
-    }
+  // Stop injecting if flowers are all full
+  if (allFlowersFull) {
+    digitalWrite(pinMap[inject-1], LOW);
+    digitalWrite(22, LOW);
   }
 }
