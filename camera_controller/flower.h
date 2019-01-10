@@ -1,4 +1,6 @@
-// FOO
+#ifndef FLOWER_H
+#define FLOWER_H
+#include "Arduino.h"
 class Flower {
 /* *
  *  An abstraction of an artificial flower.
@@ -8,24 +10,28 @@ class Flower {
   bool isEmpty(void);
   float readIRSensor(void);
   float readSolutionSensor(void);
-  void proboscisDetectShift(bool);
-  void proboscisUndetectShift(bool);
+  void proboscisDetectShift(float);
   bool proboscisDetected(void);
   bool proboscisUndetected(void);
   void checkSolnState(float);
   void checkProboscisState(float);
+  void clearProboscisDetectFlags(void);
   
   int irChannel; // Pin connected to this flower's IR sensor
-  int solnChanel; // Pin connected to this flower's solution sensor
-    
-  // Thresholds used in proboscis detection / undetection
-  static constexpr float detectThreshold = 0.6;
-  static constexpr float undetectThreshold = 0.5;
+  int solnChannel; // Pin connected to this flower's solution sensor
+
+  // Thresholds used for proboscis detection
+  float detectThreshold = 0.6;
+  float undetectThreshold = 0.5;
 
   // Thresholds used in solution detection / undetection
-  static constexpr float fullThreshold = 3.;
-  static constexpr float emptyThreshld = 0.3;
+  float fullThreshold = 3.;
+  float emptyThreshold = 0.3;
 
+  // Variables used for tracking proboscis state
+  bool proboscisWasDetected = false;
+  bool proboscisWasRemoved = true;
+  
   // This enumeration is added for code clarity
   typedef enum {
     FULL,
@@ -41,7 +47,8 @@ class Flower {
   // Enumeration added for code clarity
   typedef enum {
     DETECTED,
-    UNDETECTED
+    UNDETECTED,
+    INDETERMINATE
   }proboscisDetect_t;
   
   // Structs used in proboscis detection / undetection
@@ -50,46 +57,47 @@ class Flower {
     proboscisDetect_t window[len];
   } proboscisDetectWindow;
 
-  struct {
-    static const int len = 5000;
-    proboscisDetect_t window[len];
-  } proboscisUndetectWindow;
-
 };
 
 /* The flower class constructor */
 Flower::Flower(int irChanel, int solnChannel) {
   this->irChannel = irChannel;
   this->solnChannel = solnChannel;
-  this->solutionState = false;
+  this->solnState = EMPTY;
 }
 
 /* Returns true is the flower is empty */
 bool Flower::isEmpty(void) {
-  this->checkSolnState();
   return solnState == EMPTY;
 }
 
 /* Reads the IR sensor, checks the proboscis state, returns the voltage measured */
 float Flower::readIRSensor(void) {
-  float value = 3.3 / 4096 * analogRead(adcChannel);
+  float value = 3.3 / 4096 * analogRead(irChannel);
   this->checkProboscisState(value);
   return value;
 }
 
 /* */
 void Flower::checkProboscisState(float value) {
-  
-  proboscisDetectShift(value > onThreshold);
-  proboscisUndetectShift(value < offThreshold);
-  
-  bool proboscisWasDetected = tDetect > 0;
+  proboscisDetectShift(value);
   if (proboscisDetected() && (!proboscisWasDetected)) {
+    proboscisWasDetected = true;
     tDetect = micros();
   }
   else if (proboscisUndetected() && (proboscisWasDetected)) {
+    proboscisWasRemoved = true;
     tRemoved = micros();
   }
+}
+
+/* Clears the proboscis detection flags
+   This function is called by the main loop whenever
+   a data packet is transmitted to the PC.
+*/
+void Flower::clearProboscisDetectFlags(void) {
+  this->proboscisWasDetected = false;
+  this->proboscisWasRemoved = false;
 }
 
 
@@ -102,50 +110,50 @@ float Flower::readSolutionSensor(void) {
 
 /* Checks to see if the solution state has changed, and updates it accordingly. */
 void Flower::checkSolnState(float value) {
-  if ((solnState == FULL) && (val > fullThreshold)) {
+  if ((solnState == FULL) && (value > fullThreshold)) {
     solnState = EMPTY;
   }
-  else if ((solnState == EMPTY) && (val < emptyThreshold)) {
+  else if ((solnState == EMPTY) && (value < emptyThreshold)) {
     solnState = FULL;
   }
 }
 
 /* Used to shift new data into the probiscis detection window */
-void Flower::proboscisDetectShift(proboscisDetect_t value) {
+void Flower::proboscisDetectShift(float ir_sensor_value) {
   proboscisDetect_t * window = proboscisDetectWindow.window;
   for (int i = 0; i < proboscisDetectWindow.len - 1; i ++) {
     window[i+1] = window[i];
   }
-  window[0] = value;
-}
-
-/* Used to shift new data into the probiscis UNdetection window */
-void Flower::proboscisUndetectShift(proboscisDetect_t value) {
-  proboscisDetect_t * window = proboscisUndetectWindow.window;
-  for (int i = 0; i < proboscisUnDetectWindow.len - 1; i ++) {
-    window[i+1] = window[i];
+  if (ir_sensor_value > detectThreshold) {
+    window[0] = DETECTED;
   }
-  window[0] = value;
+  else if (ir_sensor_value < undetectThreshold) {
+    window[0] = UNDETECTED;
+  }
+  else {
+    window[0] = INDETERMINATE;
+  }
 }
 
 /* Returns the state of the proboscis detection window */
 bool Flower::proboscisDetected() {
   proboscisDetect_t * window = proboscisDetectWindow.window;
   for (int i = 0; i < proboscisDetectWindow.len; i++) {
-    if (window[i] == UNDETECTED) {
-      return true;
+    if (window[i] == UNDETECTED || window[i] == INDETERMINATE) {
+      return false;
     }
   }
-  return false;
+  return true;
 }
 
 /* Returns the state of the proboscis UNdetection window */
 bool Flower::proboscisUndetected() {
-  proboscisDetect_t * window = proboscisUndetectWindow.window;
-  for (int i = 0; i < proboscisUndetectWindow.len; i++) {
-    if (window[i] == DETECTED) {
+  proboscisDetect_t * window = proboscisDetectWindow.window;
+  for (int i = 0; i < proboscisDetectWindow.len; i++) {
+    if (window[i] == DETECTED || window[i] == INDETERMINATE) {
       return false;
     }
   }
-  return false;
+  return true;
 }
+#endif

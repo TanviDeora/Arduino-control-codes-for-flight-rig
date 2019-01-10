@@ -1,8 +1,15 @@
-// FOO
 #include <Wire.h>
+#include "flower.h"
+#include "packet.h"
 /*
  * Code by Joseph Sullivan
  */
+
+#define S1_ENERGIZE 30
+#define S2_ENERGIZE 32
+#define S3_ENERGIZE 34
+#define INJECT  36
+#define CAMERA_TRIGGER  9
 
 // PWM Configuration related constants
 const PinDescription pwm_pin_description = g_APinDescription[9];
@@ -14,6 +21,17 @@ const uint32_t prescaler = 0x0B; // identifies CLOCKA
 const uint32_t frequency = 100; // frequency
 const uint32_t period_register_data = clocka / frequency;
 const uint32_t duty_register_data = period_register_data / 2;
+
+// timing data
+uint32_t startTime;
+const uint32_t tDelay = 6e6; // Injection time delay in microseconds
+
+// Set up flowers
+Flower f1(A0, A7);
+Flower f2(A1, A6);
+Flower f3(A2, A5);
+Flower f4(A3, A4);
+Flower * flowers[4] = {&f1, &f2, &f3, &f4};
 
 // PWM Interrupt configuration
 bool interrupt_flag = false;
@@ -49,22 +67,40 @@ void refillFlowers(void);
 
 void setup() {
 
-  // Set up digital pins which indicate which flowers have nectar
-  pinMode(inPin, INPUT);      // sets the digital pin 7 as input WHY?
+  pinMode(S1_ENERGIZE, OUTPUT);
+  pinMode(S2_ENERGIZE, OUTPUT);
+  pinMode(S3_ENERGIZE, OUTPUT);
+  pinMode(INJECT, OUTPUT);
+  pinMode(CAMERA_TRIGGER, OUTPUT);
 
-  // Construct flower objects
+  // Initialize output states
+  digitalWrite(S1_ENERGIZE, LOW);
+  digitalWrite(S2_ENERGIZE, LOW);
+  digitalWrite(S3_ENERGIZE, LOW);
+  digitalWrite(INJECT, LOW);
+  digitalWrite(CAMERA_TRIGGER, HIGH);
 
+  /* Set sensor thresholds for the flowers
+  By expanding this loop, you can tune the
+  thresholds for individual flowers
+  */
+  for (int i = 0; i < 4; i++) {
+    flowers[i]->detectThreshold = 0.6;
+    flowers[i]->undetectThreshold = 0.5;
+    flowers[i]->fullThreshold = 3.;
+    flowers[i]->emptyThreshold = 0.3;
+  }
+  
   // Start the serial port
   Serial.begin(115200);
+  
   // Wait for start command before we begin
   char buff[6];
   while(strcmp(buff, "start")!=0){/*wait until the string "start" is read*/
     size_t count = Serial.readBytesUntil('\n',buff,6);
     buff[count] = '\0';
   }
-  val.asFloat = 0.0; // variable to store the read value (0=beam intact,1=beam interrupted)
-  ProboscisDetect = false;
-  inject = false;
+
   startTime=micros();
   setup_pwm();
   Serial.write(startTime);
@@ -72,40 +108,43 @@ void setup() {
 
 void loop() {
 
+  // static variables
   static bool stop_command = false;
   static uint32_t last_time;
   static const uint32_t dt = 1 * 1000; // sample IR sensor data at 1kHz
-  static float[4] irSensorVals;
-  static float[4] solnSensorvals;
-  static int inject = 0;
-  uint32_t now = micros();
+  float irSensorVals[4];
+  float solnSensorVals[4];
+  
+  uint32_t this_time = micros();
+  
 
-  // Task 1, records time of camera trigger, transmits packets to PC
+  // Records time of camera trigger, transmits packets to PC
   if(interrupt_flag && !stop_command) {
     uint32_t cameraTime = micros() - startTime;
     packet_t packet;
     init_packet(&packet);
     for (int i = 0; i < 4; i++) {
       packet.irSensorVals[i] = irSensorVals[i];
-      packet.proboscisDetect[i] = (flowers[i]->tDetect != 0);
-      flowers[i]->tDetect = 0;
+      packet.proboscisDetect[i] = flowers[i]->proboscisWasDetected;
+      flowers[i]->clearProboscisDetectFlags();
     }
-    Serial.write((uint8_t *)packet, sizeof(packet))
+    Serial.write(packet.data, sizeof(packet.data));
     interrupt_flag = false;
   }
 
   // Read bytes from the serial buffer so that we intercept the "start" and "stop" commands
   else {
     static char buff[10];
-    static uint8_t head = 0;
     while (Serial.available()) {
       size_t count = Serial.readBytesUntil('\n', buff, sizeof(buff)-1);
       buff[count] = '\0';
       if (!strcmp(buff, "stop")) {
+        // If the stop command is received, disable PWM system
         stop_command = true;
         pmc_disable_periph_clk(periph_id);
       }
       else if (!strcmp(buff, "start")) {
+        // If the start command is received, record time and enable PWM
         stop_command = false;
         startTime = micros();
         Serial.write(startTime);
@@ -115,9 +154,9 @@ void loop() {
     }
   }
 
-  /* Collect new data from flowers and refill them as necessary*/
-  if ((now - last_time) > dt) {
-    last_time = now;
+  // Collect new data from flowers and refill them as necessary
+  if ((this_time - last_time) > dt) {
+    last_time = this_time;
     for (int i = 0; i < 4; i++) {
       irSensorVals[i] = flowers[i]->readIRSensor();
       solnSensorVals[i] = flowers[i]->readSolutionSensor();
@@ -130,32 +169,42 @@ void loop() {
    It is noblocking, and must be called continuously.
 */
 void refillFlowers(void) {
-  static int pinMap[4] = {4, 5, 6, 7};
   bool allFlowersFull = true;
   for (int i = 0; i < 4; i++) {
     Flower * flower = flowers[i];
     if (flower->isEmpty()) {
       allFlowersFull = false;
       bool mothNotFeeding = true;
-      for (int j = 0; j < 4; j++) {
-        mothNotFeeding &= flowers[j]->proboscisUndetected();
-      }
+      for (int j = 0; j < 4; j++) mothNotFeeding &= flowers[j]->proboscisUndetected();
       if (mothNotFeeding) {
-        uint32_t tRemoved = flower->tRemoved;
-        bool proboscisWasRemoved = tRemoved > 0;
-        if (proboscisWasRemoved && (micros() > (tRemoved + tDelay))) {
-          digitalWrite(pinMap[i], HIGH);
-          digitalWrite(22, HIGH);
-          inject = i+1;
-        }      
+        if (flower->proboscisWasRemoved && (micros() > (flower->tRemoved + tDelay))) {
+          // This switch activates the solenoid according to which flower is being filled
+          switch (i) {
+            case 0:
+            digitalWrite(S1_ENERGIZE, HIGH);
+            case 1:
+            digitalWrite(S1_ENERGIZE, LOW);
+            digitalWrite(S2_ENERGIZE, HIGH);
+            case 2:
+            digitalWrite(S2_ENERGIZE, LOW);
+            digitalWrite(S3_ENERGIZE, HIGH);
+            case 3:
+            digitalWrite(S3_ENERGIZE, LOW);
+            default:
+            break;
+          }
+          // trigger the microinjector
+          digitalWrite(INJECT, LOW);
+        }    
       }
       break;
     }
   }
-
   // Stop injecting if flowers are all full
   if (allFlowersFull) {
-    digitalWrite(pinMap[inject-1], LOW);
-    digitalWrite(22, LOW);
+    digitalWrite(S1_ENERGIZE, LOW);
+    digitalWrite(S2_ENERGIZE, LOW);
+    digitalWrite(S3_ENERGIZE, LOW);
+    digitalWrite(INJECT, HIGH);
   }
 }

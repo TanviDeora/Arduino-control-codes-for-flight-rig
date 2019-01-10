@@ -1,3 +1,5 @@
+#ifndef PACKET_H
+#define PACKET_H
 typedef union {
   struct {
     uint8_t startByte;
@@ -14,3 +16,4 @@ void init_packet(packet_t * packet) {
   packet->startByte = 0xFF;
   packet->stopByte = 0xAA;
 }
+#endif
