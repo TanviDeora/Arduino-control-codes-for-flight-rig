@@ -27,10 +27,10 @@ uint32_t startTime;
 const uint32_t tDelay = 6e6; // Injection time delay in microseconds
 
 // Set up flowers
-Flower f1(A0, A7);
-Flower f2(A1, A6);
-Flower f3(A2, A5);
-Flower f4(A3, A4);
+Flower f1(A3, A7);
+Flower f2(A2, A6);
+Flower f3(A1, A5);
+Flower f4(A0, A4);
 Flower * flowers[4] = {&f1, &f2, &f3, &f4};
 
 // PWM Interrupt configuration
@@ -66,7 +66,6 @@ void setup_pwm() {
 void refillFlowers(void);
 
 void setup() {
-
   pinMode(S1_ENERGIZE, OUTPUT);
   pinMode(S2_ENERGIZE, OUTPUT);
   pinMode(S3_ENERGIZE, OUTPUT);
@@ -77,7 +76,7 @@ void setup() {
   digitalWrite(S1_ENERGIZE, LOW);
   digitalWrite(S2_ENERGIZE, LOW);
   digitalWrite(S3_ENERGIZE, LOW);
-  digitalWrite(INJECT, LOW);
+  digitalWrite(INJECT, HIGH);
   digitalWrite(CAMERA_TRIGGER, HIGH);
 
   /* Set sensor thresholds for the flowers
@@ -88,7 +87,7 @@ void setup() {
     flowers[i]->detectThreshold = 0.6;
     flowers[i]->undetectThreshold = 0.5;
     flowers[i]->fullThreshold = 3.;
-    flowers[i]->emptyThreshold = 0.3;
+    flowers[i]->emptyThreshold = 1.;
   }
   
   // Start the serial port
@@ -99,6 +98,7 @@ void setup() {
   while(strcmp(buff, "start")!=0){/*wait until the string "start" is read*/
     size_t count = Serial.readBytesUntil('\n',buff,6);
     buff[count] = '\0';
+    Serial.println(buff);
   }
 
   startTime=micros();
@@ -107,7 +107,6 @@ void setup() {
 }
 
 void loop() {
-
   // static variables
   static bool stop_command = false;
   static uint32_t last_time;
@@ -128,7 +127,7 @@ void loop() {
       packet.proboscisDetect[i] = flowers[i]->proboscisWasDetected;
       flowers[i]->clearProboscisDetectFlags();
     }
-    Serial.write(packet.data, sizeof(packet.data));
+    //Serial.write(packet.data, sizeof(packet.data));
     interrupt_flag = false;
   }
 
@@ -162,6 +161,12 @@ void loop() {
       solnSensorVals[i] = flowers[i]->readSolutionSensor();
     }
     refillFlowers();
+    char buf[128];
+    sprintf(buf, "IR vals: %.4f, %.4f, %.4f, %.4f\n", f1.readIRSensor(), f2.readIRSensor(), f3.readIRSensor(), f4.readIRSensor());
+    //sprintf(buf, "IR channels: %d, %d, %d, %d\n", f1.irChannel, f2.irChannel, f3.irChannel, f4.irChannel);
+    Serial.print(buf);
+    sprintf(buf, "Conductivity vals: %.4f, %.4f, %.4f, %.4f\n", flowers[0]->readSolutionSensor(), flowers[1]->readSolutionSensor(), flowers[2]->readSolutionSensor(), flowers[3]->readSolutionSensor());
+    //Serial.print(buf);
   }
 }
 
@@ -173,38 +178,56 @@ void refillFlowers(void) {
   for (int i = 0; i < 4; i++) {
     Flower * flower = flowers[i];
     if (flower->isEmpty()) {
+      //Serial.print("Flower "); Serial.print(i+1); Serial.println(" is empty.");
       allFlowersFull = false;
       bool mothNotFeeding = true;
-      for (int j = 0; j < 4; j++) mothNotFeeding &= flowers[j]->proboscisUndetected();
+      for (int j = 0; j < 4; j++) mothNotFeeding &= flowers[j]->proboscisUndetected() && (micros() > (flowers[j]->tRemoved + tDelay));
       if (mothNotFeeding) {
-        if (flower->proboscisWasRemoved && (micros() > (flower->tRemoved + tDelay))) {
-          // This switch activates the solenoid according to which flower is being filled
-          switch (i) {
-            case 0:
-            digitalWrite(S1_ENERGIZE, HIGH);
-            case 1:
-            digitalWrite(S1_ENERGIZE, LOW);
-            digitalWrite(S2_ENERGIZE, HIGH);
-            case 2:
-            digitalWrite(S2_ENERGIZE, LOW);
-            digitalWrite(S3_ENERGIZE, HIGH);
-            case 3:
-            digitalWrite(S3_ENERGIZE, LOW);
-            default:
-            break;
-          }
-          // trigger the microinjector
-          digitalWrite(INJECT, LOW);
-        }    
+        //Serial.println("Moth not feeding");
+        //Serial.print("Flower "); Serial.println(i+1);
+        //Serial.print("t removed "); Serial.println(flower->tRemoved);
+        //Serial.print("t detect "); Serial.println(flower->tDetect);
+        // This switch activates the solenoid according to which flower is being filled
+        switch (i) {
+          case 0:
+          //Serial.println("Fill flower 1");
+          digitalWrite(S1_ENERGIZE, HIGH);
+          digitalWrite(S2_ENERGIZE, LOW);
+          digitalWrite(S3_ENERGIZE, LOW);
+          break;
+          case 1:
+          //Serial.println("Fill flower 2");
+          digitalWrite(S1_ENERGIZE, LOW);
+          digitalWrite(S2_ENERGIZE, HIGH);
+          digitalWrite(S3_ENERGIZE, LOW);
+          break;
+          case 2:
+          //Serial.println("Fill flower 3");
+          digitalWrite(S1_ENERGIZE, LOW);
+          digitalWrite(S2_ENERGIZE, LOW);
+          digitalWrite(S3_ENERGIZE, HIGH);
+          break;
+          case 3:
+          //Serial.println("Fille flower 4");
+          digitalWrite(S1_ENERGIZE, LOW);
+          digitalWrite(S2_ENERGIZE, LOW);
+          digitalWrite(S3_ENERGIZE, LOW);
+          break;
+          default:
+          break;
+        }
+        // trigger the microinjector
+        digitalWrite(INJECT, LOW);
+        break;    
       }
-      break;
+      else {
+        // Moth is feeding, don't trigger injector
+        digitalWrite(INJECT, HIGH);
+      }
     }
   }
   // Stop injecting if flowers are all full
   if (allFlowersFull) {
-    digitalWrite(S1_ENERGIZE, LOW);
-    digitalWrite(S2_ENERGIZE, LOW);
-    digitalWrite(S3_ENERGIZE, LOW);
     digitalWrite(INJECT, HIGH);
   }
 }

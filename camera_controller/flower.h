@@ -21,8 +21,8 @@ class Flower {
   int solnChannel; // Pin connected to this flower's solution sensor
 
   // Thresholds used for proboscis detection
-  float detectThreshold = 0.6;
-  float undetectThreshold = 0.5;
+  float detectThreshold = 1.;
+  float undetectThreshold = 0.3;
 
   // Thresholds used in solution detection / undetection
   float fullThreshold = 3.;
@@ -60,10 +60,11 @@ class Flower {
 };
 
 /* The flower class constructor */
-Flower::Flower(int irChanel, int solnChannel) {
+Flower::Flower(int irChannel, int solnChannel) {
   this->irChannel = irChannel;
   this->solnChannel = solnChannel;
   this->solnState = EMPTY;
+  this->proboscisWasRemoved = true;
 }
 
 /* Returns true is the flower is empty */
@@ -73,7 +74,7 @@ bool Flower::isEmpty(void) {
 
 /* Reads the IR sensor, checks the proboscis state, returns the voltage measured */
 float Flower::readIRSensor(void) {
-  float value = 3.3 / 4096 * analogRead(irChannel);
+  float value = 3.3 / 1024 * analogRead(this->irChannel);
   this->checkProboscisState(value);
   return value;
 }
@@ -81,11 +82,12 @@ float Flower::readIRSensor(void) {
 /* */
 void Flower::checkProboscisState(float value) {
   proboscisDetectShift(value);
-  if (proboscisDetected() && (!proboscisWasDetected)) {
+  if (proboscisDetected() && (proboscisWasRemoved)) {
     proboscisWasDetected = true;
+    proboscisWasRemoved = false;
     tDetect = micros();
   }
-  else if (proboscisUndetected() && (proboscisWasDetected)) {
+  else if (proboscisUndetected() && (!proboscisWasRemoved)) {
     proboscisWasRemoved = true;
     tRemoved = micros();
   }
@@ -97,23 +99,22 @@ void Flower::checkProboscisState(float value) {
 */
 void Flower::clearProboscisDetectFlags(void) {
   this->proboscisWasDetected = false;
-  this->proboscisWasRemoved = false;
 }
 
 
 /* Reads the solution sensor, checks the solution state, returns the voltage measured*/
 float Flower::readSolutionSensor(void) {
-  float value = 3.3 / 4096 * analogRead(solnChannel);
+  float value = 3.3 / 1024 * analogRead(this->solnChannel);
   this->checkSolnState(value);
   return value;
 }
 
 /* Checks to see if the solution state has changed, and updates it accordingly. */
 void Flower::checkSolnState(float value) {
-  if ((solnState == FULL) && (value > fullThreshold)) {
+  if ((solnState == FULL) && (value < emptyThreshold)) {
     solnState = EMPTY;
   }
-  else if ((solnState == EMPTY) && (value < emptyThreshold)) {
+  else if ((solnState == EMPTY) && (value > fullThreshold)) {
     solnState = FULL;
   }
 }

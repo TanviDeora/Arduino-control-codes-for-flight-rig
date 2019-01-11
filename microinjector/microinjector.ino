@@ -18,6 +18,7 @@
 #define SOLENOID_ENERGIZE 11
 #define BOUNCE_DELAY 100
 #define TRIGGER_PIN 8
+#define USER_TRIGGER_PIN 13
 
 // Motor constants
 static const int motor_speed = 600;
@@ -63,7 +64,6 @@ void setup() {
   }
                                                                 // setup serial port
   Serial.begin(115200);
-//  Serial.setTimeout(1000);
 
   /* Set up pin modes for safety / limit switches */
   pinMode(S1, INPUT_PULLUP);                                    // pole 1 of safety switch 1
@@ -105,6 +105,7 @@ void setup() {
 
   /* Setup of the TTL injection trigger*/
   pinMode(TRIGGER_PIN, INPUT_PULLUP);
+  pinMode(USER_TRIGGER_PIN, INPUT_PULLUP);
 
   AFMS.begin();                                                 // Initialize motor
   motor->setSpeed(motor_speed);
@@ -116,8 +117,9 @@ void setup() {
 
 void loop() {
   if (wait == injector_state){                             // wait state. The injector is waiting for an injection commmand form the user.
-    if(!digitalRead(TRIGGER_PIN)){
+    if(!digitalRead(TRIGGER_PIN) && !digitalRead(USER_TRIGGER_PIN)){
       injector_state = inject;
+      digitalWrite(SOLENOID_ENERGIZE, LOW);
       Serial.println("Injecting.");
     }
   }
@@ -133,9 +135,10 @@ void loop() {
     }
 
     /* If the liquid is detected, cease injecting and wait */
-    else if (digitalRead(TRIGGER_PIN)){
+    else if (digitalRead(TRIGGER_PIN) || digitalRead(USER_TRIGGER_PIN)){
       motor->release();
       injector_state = wait;
+      digitalWrite(SOLENOID_ENERGIZE, HIGH);
       Serial.println("Liquid detected, injection complete.");
     }
 
